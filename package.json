@@ -1,0 +1,16 @@
+{
+  "name": "orchestra-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extensions for orchestra-like agent orchestration",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "pnpm -r test",
+    "test:queue": "pnpm --filter pi-queue test",
+    "test:github": "pnpm --filter pi-github-tools test",
+    "test:listeners": "pnpm --filter pi-listeners test",
+    "test:autoformalize": "pnpm --filter pi-autoformalize test"
+  }
+}

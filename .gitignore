@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# Test temp dirs
+~/.pi/agent/tmp/
+# OS files
+.DS_Store
+Thumbs.db
