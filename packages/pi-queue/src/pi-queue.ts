@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import * as fs from "node:fs"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,30 +115,29 @@ const EVENTS_FILE = () => `${QUEUE_DIR()}/events.jsonl`
 
 class QueueStorage {
   private dir: string
-  private fs: typeof import("node:fs")
+  private fs = fs
 
   constructor() {
-    this.fs = require("node:fs")
     this.dir = QUEUE_DIR()
     this.ensureDir()
   }
 
   private ensureDir() {
-    if (!this.fs.existsSync(this.dir)) {
-      this.fs.mkdirSync(this.dir, { recursive: true })
+    if (!fs.existsSync(this.dir)) {
+      fs.mkdirSync(this.dir, { recursive: true })
     }
   }
 
   save(entry: QueueEntry): void {
     this.ensureDir()
     const path = `${this.dir}/${entry.id}.json`
-    this.fs.writeFileSync(path, toJson(entry))
+    fs.writeFileSync(path, toJson(entry))
   }
 
   load(id: string): QueueEntry | null {
     const path = `${this.dir}/${id}.json`
-    if (!this.fs.existsSync(path)) return null
-    const raw = this.fs.readFileSync(path, "utf-8")
+    if (!fs.existsSync(path)) return null
+    const raw = fs.readFileSync(path, "utf-8")
     return fromJson(raw)
   }
 
@@ -145,9 +145,9 @@ class QueueStorage {
     this.ensureDir()
     const entries: QueueEntry[] = []
     try {
-      const files = this.fs.readdirSync(this.dir).filter(f => f.endsWith(".json") && f !== "events.jsonl")
+      const files = fs.readdirSync(this.dir).filter(f => f.endsWith(".json") && f !== "events.jsonl")
       for (const file of files) {
-        const raw = this.fs.readFileSync(`${this.dir}/${file}`, "utf-8")
+        const raw = fs.readFileSync(`${this.dir}/${file}`, "utf-8")
         const entry = fromJson(raw)
         if (entry) entries.push(entry)
       }
@@ -159,14 +159,14 @@ class QueueStorage {
 
   remove(id: string): void {
     try {
-      this.fs.unlinkSync(`${this.dir}/${id}.json`)
+      fs.unlinkSync(`${this.dir}/${id}.json`)
     } catch {
       // Ignore
     }
   }
 
   exists(id: string): boolean {
-    return this.fs.existsSync(`${this.dir}/${id}.json`)
+    return fs.existsSync(`${this.dir}/${id}.json`)
   }
 }
 
@@ -176,30 +176,29 @@ class QueueStorage {
 
 class EventLogger {
   private file: string
-  private fs: typeof import("node:fs")
+  private fs = fs
 
   constructor() {
-    this.fs = require("node:fs")
     this.file = EVENTS_FILE()
     this.ensureFile()
   }
 
   private ensureFile() {
-    if (!this.fs.existsSync(this.file)) {
-      this.fs.writeFileSync(this.file, "", "utf-8")
+    if (!fs.existsSync(this.file)) {
+      fs.writeFileSync(this.file, "", "utf-8")
     }
   }
 
   emit(evt: QueueEvent): void {
     this.ensureFile()
     const line = JSON.stringify(evt) + "\n"
-    this.fs.appendFileSync(this.file, line, "utf-8")
+    fs.appendFileSync(this.file, line, "utf-8")
   }
 
   getProcessedIds(): string[] {
-    if (!this.fs.existsSync(this.file)) return []
+    if (!fs.existsSync(this.file)) return []
     try {
-      const content = this.fs.readFileSync(this.file, "utf-8")
+      const content = fs.readFileSync(this.file, "utf-8")
       const ids: string[] = []
       for (const line of content.trim().split("\n")) {
         if (!line) continue
