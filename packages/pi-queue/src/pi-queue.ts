@@ -227,6 +227,7 @@ export class QueueManager {
   private daemonRunning: boolean = false
   private daemonInterval: ReturnType<typeof setInterval> | null = null
   private onEntryChange?: (entry: QueueEntry, oldStatus?: QueueStatus) => void
+  private customExecute: boolean = false // true once setExecuteFn() is called
 
   constructor() {
     this.storage = new QueueStorage()
@@ -431,16 +432,16 @@ export class QueueManager {
    * Called by the extension host to execute an entry.
    * Override this to provide actual task execution.
    *
-   * @remarks The default implementation is a no-op (stderr only).
-   * The extension host should call `setExecuteFn()` to provide real
-   * task execution. The daemon does NOT auto-execute entries by default.
+   * @remarks The default implementation is a silent no-op.
+   * It marks the task as "done" and emits the event, but performs no
+   * side effects. The extension host should call `setExecuteFn()` to
+   * provide real task execution. The daemon does NOT auto-execute
+   * entries by default — use `/queue start` to activate it.
    */
   executeEntry(entry: QueueEntry): void {
-    // Default: no-op — only logs to stderr so the daemon doesn't silently
-    // consume entries. Hosts must call setExecuteFn() to provide real execution.
-    console.error(
-      `[pi-queue] task ${entry.id} executed (no handler registered; use setExecuteFn())`
-    )
+    // Default: silent no-op. Marks done + emits event.
+    // No console output — writing to stderr corrupts the TUI terminal
+    // state (ANSI cursor/ESC handling) while the daemon polls in-process.
     entry.status = "done"
     this.storage.save(entry)
     this.events.emit({ event: "task_done", id: entry.id, status: "done" })
@@ -453,6 +454,14 @@ export class QueueManager {
    */
   setExecuteFn(fn: (entry: QueueEntry) => void): void {
     this.executeEntry = fn
+    this.customExecute = true
+  }
+
+  /**
+   * Returns true if a custom execute handler has been registered via setExecuteFn().
+   */
+  hasCustomExecute(): boolean {
+    return this.customExecute
   }
 
   // ---------------------------------------------------------------------------
@@ -655,7 +664,11 @@ export default function piQueueExtension(pi: ExtensionAPI) {
             ctx.ui.notify("Daemon already running", "info")
           } else {
             queue.startDaemon()
-            ctx.ui.notify("Daemon started", "success")
+            if (queue.hasCustomExecute()) {
+              ctx.ui.notify("Daemon started (handler registered)", "success")
+            } else {
+              ctx.ui.notify("Daemon started — no handler registered; entries marked done silently. Use /queue stop.", "warning")
+            }
           }
           break
         }
