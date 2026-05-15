@@ -6,7 +6,9 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { spawn } from "node:child_process"
 import * as fs from "node:fs"
+import * as path from "node:path"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -218,6 +220,18 @@ class EventLogger {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function getPiInvocation(args: string[]): { command: string; args: string[] } {
+  // Try to invoke pi using the current process's argv[1] (the pi script)
+  if (process.argv[1] && fs.existsSync(process.argv[1])) {
+    return { command: process.execPath, args: [process.argv[1], ...args] }
+  }
+  return { command: "pi", args }
+}
+
+// ---------------------------------------------------------------------------
 // Queue Manager (the core)
 // ---------------------------------------------------------------------------
 
@@ -228,6 +242,7 @@ export class QueueManager {
   private daemonInterval: ReturnType<typeof setInterval> | null = null
   private onEntryChange?: (entry: QueueEntry, oldStatus?: QueueStatus) => void
   private customExecute: boolean = false // true once setExecuteFn() is called
+  private childProcessMap: Map<string, import("node:child_process").ChildProcess> = new Map()
 
   constructor() {
     this.storage = new QueueStorage()
@@ -404,6 +419,23 @@ export class QueueManager {
     return this.daemonRunning
   }
 
+  /**
+   * Kill all child processes spawned for queue entries.
+   * Called on session_shutdown for cleanup.
+   */
+  cleanup(): void {
+    for (const [id, proc] of this.childProcessMap) {
+      if (!proc.killed) {
+        proc.kill("SIGTERM")
+        // Give a brief window, then force kill
+        setTimeout(() => {
+          if (!proc.killed) proc.kill("SIGKILL")
+        }, 2000)
+      }
+    }
+    this.childProcessMap.clear()
+  }
+
   private tick(): void {
     if (!this.daemonRunning) return
     const next = this.nextPending()
@@ -429,23 +461,98 @@ export class QueueManager {
   // ---------------------------------------------------------------------------
 
   /**
+   * Spawn a subprocess to execute a queue entry.
+   * Uses `pi --mode json -p --no-session` for structured output.
+   * Tracks the child process for lifecycle management.
+   */
+  spawnProcess(entry: QueueEntry): import("node:child_process").ChildProcess {
+    const cwd = process.cwd()
+    const args = ["--mode", "json", "-p", "--no-session"]
+    if (entry.model) args.push("--model", entry.model)
+    if (entry.agent) args.push("--agent", entry.agent)
+    args.push(`Task: ${entry.prompt}`)
+
+    const invocation = getPiInvocation(args)
+    const proc = spawn(invocation.command, invocation.args, {
+      cwd,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    this.childProcessMap.set(entry.id, proc)
+
+    let buffer = ""
+    let outputText = ""
+
+    proc.stdout.on("data", (data) => {
+      buffer += data.toString()
+      const lines = buffer.split("\n")
+      buffer = lines.pop() || ""
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try {
+          const event = JSON.parse(line)
+          if (event.type === "message_end" && event.message?.role === "assistant") {
+            const msg = event.message as { content?: Array<{ type: string; text?: string }> }
+            for (const part of msg.content || []) {
+              if (part.type === "text" && part.text) {
+                outputText += part.text
+              }
+            }
+          }
+        } catch {
+          // non-JSON output — may be print mode
+          outputText += line
+        }
+      }
+    })
+
+    proc.stderr.on("data", (data) => {
+      // ignore stderr — no console output to avoid TUI corruption
+    })
+
+    proc.on("close", (code) => {
+      this.childProcessMap.delete(entry.id)
+      const doneStatus: QueueStatus = code === 0 ? "done" : "failed"
+      if (entry.status === "running" || entry.status === "pending") {
+        entry.status = doneStatus
+        entry.retriesRemaining = (entry.retriesRemaining ?? 0) - 1
+        if (doneStatus === "failed" && entry.retriesRemaining && entry.retriesRemaining > 0) {
+          // Re-queue
+          entry.status = "pending"
+        }
+        this.storage.save(entry)
+        this.events.emit({
+          event: doneStatus === "done" ? "task_done" : "task_failed",
+          id: entry.id,
+          status: doneStatus,
+          reason: code !== 0 ? `Exit code ${code}` : undefined,
+        })
+        this.notifyChange(entry, "running")
+      }
+    })
+
+    proc.on("error", () => {
+      this.childProcessMap.delete(entry.id)
+      if (entry.status === "running" || entry.status === "pending") {
+        entry.status = "failed"
+        this.storage.save(entry)
+        this.events.emit({ event: "task_failed", id: entry.id, reason: "Process spawn error" })
+        this.notifyChange(entry, "running")
+      }
+    })
+
+    return proc
+  }
+
+  /**
    * Called by the extension host to execute an entry.
-   * Override this to provide actual task execution.
-   *
-   * @remarks The default implementation is a silent no-op.
-   * It marks the task as "done" and emits the event, but performs no
-   * side effects. The extension host should call `setExecuteFn()` to
-   * provide real task execution. The daemon does NOT auto-execute
-   * entries by default — use `/queue start` to activate it.
+   * The default spawns a subprocess (`pi --mode json -p --no-session`)
+   * to run the task and updates the entry status on completion.
    */
   executeEntry(entry: QueueEntry): void {
-    // Default: silent no-op. Marks done + emits event.
-    // No console output — writing to stderr corrupts the TUI terminal
-    // state (ANSI cursor/ESC handling) while the daemon polls in-process.
-    entry.status = "done"
-    this.storage.save(entry)
-    this.events.emit({ event: "task_done", id: entry.id, status: "done" })
-    this.notifyChange(entry)
+    if (this.customExecute) return // already overridden
+    this.spawnProcess(entry)
   }
 
   /**
@@ -716,7 +823,10 @@ export default function piQueueExtension(pi: ExtensionAPI) {
   //   - by the `/queue start` command
   //   - by another extension calling queue.startDaemon()
   //   - after setExecuteFn() is registered with a real handler
-  pi.on("session_shutdown", () => queue.stopDaemon())
+  pi.on("session_shutdown", () => {
+    queue.stopDaemon()
+    queue.cleanup()
+  })
 
   // Also expose queue manager for other extensions
   ;(pi as any).__queue__ = queue
