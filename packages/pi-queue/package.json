@@ -1,0 +1,15 @@
+{
+  "name": "pi-queue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core queue manager for orchestra-pi",
+  "type": "module",
+  "main": "src/pi-queue.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "example-comments",
+  "repos": [
+    { "upstream": "owner/repo", "fork": "pimotte/repo" }
+  ],
+  "trigger": "@orchestra",
+  "authorizedUsers": ["pimotte"],
+  "labels": [],
+  "action": {
+    "mode": "pr",
+    "promptTemplate": "Comment on issue/PR #{{issue_number}} by {{author}}:\n\n{{body}}\n\nURL: {{url}}",
+    "priority": 10,
+    "repo": "{{upstream}}",
+    "series": "issue-{{issue_number}}"
+  },
+  "intervalSeconds": 120
+}
