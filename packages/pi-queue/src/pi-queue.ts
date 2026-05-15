@@ -464,6 +464,9 @@ export class QueueManager {
 // ---------------------------------------------------------------------------
 
 export default function piQueueExtension(pi: ExtensionAPI) {
+  try {
+    console.error("[pi-queue] Extension loading...")
+  } catch {}
   const queue = new QueueManager()
 
   // Allow the host to set the execute function
@@ -607,6 +610,10 @@ export default function piQueueExtension(pi: ExtensionAPI) {
       },
     },
   })
+
+  try {
+    console.error("[pi-queue] Queue command registered")
+  } catch {}
 
   // Also expose queue manager for other extensions
   ;(pi as any).__queue__ = queue
