@@ -466,22 +466,59 @@ export class QueueManager {
 export default function piQueueExtension(pi: ExtensionAPI) {
   const queue = new QueueManager()
 
-  // Allow the host to set the execute function
+  // ---------------------------------------------------------------------------
+  // Command handler (subcommands parsed from args string)
+  // ---------------------------------------------------------------------------
+
   pi.registerCommand("queue", {
     description: "Queue management commands",
-    subcommands: {
-      list: {
-        description: "List queue entries (default: sorted by execution order)",
-        args: ["[status]"],
-        handler: async (args: string[]) => {
-          const filter = args[0] || undefined
+    handler: async (args: string, ctx) => {
+      const trimmed = args.trim()
+      if (!trimmed) {
+        const { byStatus, bySource } = queue.stats()
+        const total = Object.values(byStatus).reduce((a, b) => a + b, 0)
+        const lines = [
+          "📋 Queue Manager",
+          "",
+          `Total: ${total} entries`,
+          `Status: ${Object.entries(byStatus).map(([k, v]) => `${k}:${v}`).join(", ")}`,
+          `Sources: ${Object.entries(bySource).map(([k, v]) => `${k}:${v}`).join(", ")}`,
+          "",
+          "Usage:",
+          "  /queue list [status]           — list entries",
+          "  /queue show <id>               — show details",
+          "  /queue add <prompt> [options]   — add task",
+          "  /queue pause <id>              — pause task",
+          "  /queue resume <id>             — resume paused",
+          "  /queue cancel <id>             — cancel task",
+          "  /queue retry <id>              — retry failed",
+          "  /queue stats                   — summary stats",
+          "",
+          "Options for add: --priority N, --repo O/R, --model M, --mode fork|pr",
+        ]
+        ctx.ui.setWidget("queue", lines)
+        ctx.ui.notify("Queue manager loaded", "info")
+        return
+      }
+
+      const parts = trimmed.split(/\s+/)
+      const sub = parts[0]!
+      const rest = parts.slice(1).join(" ")
+
+      switch (sub) {
+        case "list": {
+          const filter = rest || undefined
           const entries = queue.list(filter)
           const { byStatus, bySource } = queue.stats()
-          let output = `📋 Queue (${entries.length} entries)\n\n`
-          if (filter) output += `Filter: ${filter}\n\n`
-          output += `Totals — Status: ${Object.entries(byStatus).map(([k, v]) => `${k}:${v}`).join(", ")} | Sources: ${Object.entries(bySource).map(([k, v]) => `${k}:${v}`).join(", ")}\n\n`
+          const lines: string[] = [
+            `📋 Queue (${entries.length} entries)`,
+            "",
+            `Totals — Status: ${Object.entries(byStatus).map(([k, v]) => `${k}:${v}`).join(", ")} | Sources: ${Object.entries(bySource).map(([k, v]) => `${k}:${v}`).join(", ")}`,
+          ]
+          if (filter) lines.push(`Filter: ${filter}`, "")
+          else lines.push("")
           if (entries.length === 0) {
-            output += "(empty)\n"
+            lines.push("(empty)")
           } else {
             for (const e of entries) {
               const statusIcon = {
@@ -494,119 +531,148 @@ export default function piQueueExtension(pi: ExtensionAPI) {
               const pausedTag = e.paused ? " [PAUSED]" : ""
               const sourceTag = e.source !== "manual" ? ` [${e.source}]` : ""
               const priorityTag = e.priority !== 10 ? ` [P:${e.priority}]` : ""
-              output += `${statusIcon} ${e.id.slice(0, 12)} | ${e.prompt.slice(0, 60).replace(/\n/g, " ")}${pausedTag}${sourceTag}${priorityTag}\n`
+              lines.push(`${statusIcon} ${e.id.slice(0, 12)} | ${e.prompt.slice(0, 60).replace(/\n/g, " ")}${pausedTag}${sourceTag}${priorityTag}`)
             }
           }
-          return { content: output, type: "text" }
-        },
-      },
-      show: {
-        description: "Show full entry details",
-        args: ["<id>"],
-        handler: async (args: string[]) => {
-          const id = args[0]
-          if (!id) return { content: "Error: queue show requires an <id>\n", type: "text" }
+          ctx.ui.setWidget("queue", lines)
+          break
+        }
+
+        case "show": {
+          const id = rest
+          if (!id) {
+            ctx.ui.notify("Error: queue show requires an <id>", "error")
+            return
+          }
           const entry = queue.get(id)
-          if (!entry) return { content: `Entry ${id} not found\n`, type: "text" }
-          const output = JSON.stringify(entry, null, 2)
-          return { content: output, type: "text" }
-        },
-      },
-      add: {
-        description: "Add a task to the queue",
-        args: ["<prompt>", "--priority N", "--repo owner/repo", "--model name", "--mode fork|pr", "--agent name", "--series name", "--max-retries N"],
-        handler: async (args: string[]) => {
-          if (args.length === 0) return { content: "Error: queue add requires a <prompt>\n", type: "text" }
-          const prompt = args[0]
-          const rest = args.slice(1)
-          const priority = parseInt(rest.find(a => a.startsWith("--priority"))?.split("=")[1] ?? rest.find(a => a.startsWith("--priority "))?.split("=")[1] ?? "") || 10
-          const repo = rest.find(a => a.startsWith("--repo"))?.split("=")[1] || rest.find(a => a.startsWith("--repo "))?.split("=")[1]
-          const model = rest.find(a => a.startsWith("--model"))?.split("=")[1] || rest.find(a => a.startsWith("--model "))?.split("=")[1]
-          const mode = rest.find(a => a.startsWith("--mode"))?.split("=")[1] || rest.find(a => a.startsWith("--mode "))?.split("=")[1]
-          const agent = rest.find(a => a.startsWith("--agent"))?.split("=")[1] || rest.find(a => a.startsWith("--agent "))?.split("=")[1]
-          const series = rest.find(a => a.startsWith("--series"))?.split("=")[1] || rest.find(a => a.startsWith("--series "))?.split("=")[1]
-          const maxRetries = parseInt(rest.find(a => a.startsWith("--max-retries"))?.split("=")[1] ?? rest.find(a => a.startsWith("--max-retries "))?.split("=")[1] ?? "") || 0
+          if (!entry) {
+            ctx.ui.notify(`Entry ${id} not found`, "error")
+            return
+          }
+          ctx.ui.setWidget("queue", JSON.stringify(entry, null, 2).split("\n"))
+          ctx.ui.notify(`Showing entry: ${id}`, "info")
+          break
+        }
+
+        case "add": {
+          if (!rest) {
+            ctx.ui.notify("Error: queue add requires a <prompt>", "error")
+            return
+          }
+          // Parse: "prompt --priority 5 --repo owner/repo --model name ..."
+          const addArgs = rest.split(/(?=--)/)
+          const prompt = addArgs[0]!.trim()
+          const priority = parseInt(/--priority\s*(\d+)/.exec(rest)?.[1] || "") || 10
+          const repo = /--repo\s*([^\s]+)/.exec(rest)?.[1]
+          const model = /--model\s*([^\s]+)/.exec(rest)?.[1]
+          const mode = /--mode\s*(fork|pr)/.exec(rest)?.[1] as TaskMode | undefined
+          const agent = /--agent\s*([^\s]+)/.exec(rest)?.[1]
+          const series = /--series\s*([^\s]+)/.exec(rest)?.[1]
+          const maxRetries = parseInt(/--max-retries\s*(\d+)/.exec(rest)?.[1] || "") || 0
 
           const entry = queue.add({
             prompt,
             priority: isNaN(priority) ? 10 : priority,
             repo,
             model,
-            mode: (mode as TaskMode) || "pr",
+            mode: mode || "pr",
             agent,
             series,
             maxRetries: isNaN(maxRetries) ? 0 : maxRetries,
           })
-          return { content: `Added: ${entry.id}\nPriority: ${entry.priority}\nPrompt: ${entry.prompt.slice(0, 80)}\n`, type: "text" }
-        },
-      },
-      pause: {
-        description: "Pause a task (skip in scheduling)",
-        args: ["<id>"],
-        handler: async (args: string[]) => {
-          const id = args[0]
-          if (!id) return { content: "Error: queue pause requires an <id>\n", type: "text" }
+          ctx.ui.notify(`Added: ${entry.id} | P:${entry.priority} | ${entry.prompt.slice(0, 80)}`, "success")
+          break
+        }
+
+        case "pause": {
+          const id = rest
+          if (!id) {
+            ctx.ui.notify("Error: queue pause requires an <id>", "error")
+            return
+          }
           const entry = queue.pause(id)
-          if (!entry) return { content: `Entry ${id} not found\n`, type: "text" }
-          return { content: `Paused: ${id}\n`, type: "text" }
-        },
-      },
-      resume: {
-        description: "Resume a paused task",
-        args: ["<id>"],
-        handler: async (args: string[]) => {
-          const id = args[0]
-          if (!id) return { content: "Error: queue resume requires an <id>\n", type: "text" }
+          if (!entry) {
+            ctx.ui.notify(`Entry ${id} not found`, "error")
+            return
+          }
+          ctx.ui.notify(`Paused: ${id}`, "info")
+          break
+        }
+
+        case "resume": {
+          const id = rest
+          if (!id) {
+            ctx.ui.notify("Error: queue resume requires an <id>", "error")
+            return
+          }
           const entry = queue.resume(id)
-          if (!entry) return { content: `Entry ${id} not found\n`, type: "text" }
-          return { content: `Resumed: ${id}\n`, type: "text" }
-        },
-      },
-      cancel: {
-        description: "Cancel a task (cascades to dependents)",
-        args: ["<id>"],
-        handler: async (args: string[]) => {
-          const id = args[0]
-          if (!id) return { content: "Error: queue cancel requires an <id>\n", type: "text" }
+          if (!entry) {
+            ctx.ui.notify(`Entry ${id} not found`, "error")
+            return
+          }
+          ctx.ui.notify(`Resumed: ${id}`, "info")
+          break
+        }
+
+        case "cancel": {
+          const id = rest
+          if (!id) {
+            ctx.ui.notify("Error: queue cancel requires an <id>", "error")
+            return
+          }
           const changed = queue.cancel(id)
           const count = changed.length
-          return { content: `Cancelled ${id}${count > 1 ? ` (and ${count - 1} dependents)` : ""}\n`, type: "text" }
-        },
-      },
-      retry: {
-        description: "Retry a failed task",
-        args: ["<id>"],
-        handler: async (args: string[]) => {
-          const id = args[0]
-          if (!id) return { content: "Error: queue retry requires an <id>\n", type: "text" }
-          const entry = queue.retry(id)
-          if (!entry) return { content: `Entry ${id} not found or not in failed state\n`, type: "text" }
-          return { content: `Retried: ${id}\n`, type: "text" }
-        },
-      },
-      stats: {
-        description: "Show queue statistics",
-        handler: async () => {
-          const { byStatus, bySource } = queue.stats()
-          let output = "📊 Queue Stats\n\n"
-          output += "By Status:\n"
-          for (const [status, count] of Object.entries(byStatus)) {
-            output += `  ${status}: ${count}\n`
+          ctx.ui.notify(`Cancelled ${id}${count > 1 ? ` (and ${count - 1} dependents)` : ""}`, "info")
+          break
+        }
+
+        case "retry": {
+          const id = rest
+          if (!id) {
+            ctx.ui.notify("Error: queue retry requires an <id>", "error")
+            return
           }
-          output += "\nBy Source:\n"
+          const entry = queue.retry(id)
+          if (!entry) {
+            ctx.ui.notify(`Entry ${id} not found or not in failed state`, "error")
+            return
+          }
+          ctx.ui.notify(`Retried: ${id}`, "success")
+          break
+        }
+
+        case "stats": {
+          const { byStatus, bySource } = queue.stats()
+          const lines: string[] = ["📊 Queue Stats", ""]
+          lines.push("By Status:")
+          for (const [status, count] of Object.entries(byStatus)) {
+            lines.push(`  ${status}: ${count}`)
+          }
+          lines.push("")
+          lines.push("By Source:")
           for (const [source, count] of Object.entries(bySource)) {
-            output += `  ${source}: ${count}\n`
+            lines.push(`  ${source}: ${count}`)
           }
           const pending = byStatus["pending"] || 0
           const running = byStatus["running"] || 0
-          output += `\nTotal: ${Object.values(byStatus).reduce((a, b) => a + b, 0)} entries`
-          if (pending > 0) output += ` (${pending} pending, ${running} running)`
-          output += "\n"
-          return { content: output, type: "text" }
-        },
-      },
+          lines.push("")
+          lines.push(`Total: ${Object.values(byStatus).reduce((a, b) => a + b, 0)} entries`)
+          if (pending > 0) lines.push(`(${pending} pending, ${running} running)`)
+          ctx.ui.setWidget("queue", lines)
+          ctx.ui.notify("Stats updated", "info")
+          break
+        }
+
+        default:
+          ctx.ui.notify(`Unknown queue subcommand: ${sub}\nUse /queue for usage`, "error")
+      }
     },
   })
+
+  // Daemon lifecycle
+  // QueueManager manages its own setInterval internally.
+  pi.on("session_start", () => queue.startDaemon())
+  pi.on("session_shutdown", () => queue.stopDaemon())
 
   // Also expose queue manager for other extensions
   ;(pi as any).__queue__ = queue
