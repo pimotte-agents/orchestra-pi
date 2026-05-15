@@ -598,23 +598,24 @@ export default function piQueueExtension(pi: ExtensionAPI) {
   // "child.render is not a function" crash when the renderer returns a plain object).
   pi.registerMessageRenderer("queue", () => undefined)
 
+  // Track whether we're currently streaming so we know which delivery mode to use.
+  // isIdle() is NOT available on ExtensionAPI — it lives on ExtensionContextActions.
+  let streaming = false
+  pi.on("message_start", () => { streaming = true })
+  pi.on("message_end", () => { streaming = false })
+
   // Helper: send queue output as a message in the flow (not a cramped widget)
   const sendQueue = (lines: string[]): void => {
-    // Use deliverAs: "steer" for streaming, but only when actually streaming.
-    // When idle (not streaming), deliverAs: "steer" falls through to the
-    // else-branch in sendCustomMessage, which pushes the raw message into
-    // agent.state.messages. The content array then corrupts subsequent LLM
-    // calls because convertToLlm turns it into { role: "user", content: lines }
-    // where lines is a plain string array (no { type: "text" } wrappers).
-    //
-    // The fix: check isIdle and use the appropriate delivery mode.
+    // When streaming, use deliverAs: "steer" so the message is delivered
+    // immediately without hijacking the current turn. When idle, omit
+    // deliverAs so the message falls through to the default path.
     pi.sendMessage(
       {
         customType: "queue",
         content: lines,
         display: true,
       },
-      pi.isIdle() ? {} : { deliverAs: "steer" },
+      streaming ? { deliverAs: "steer" } : {},
     )
   }
 
