@@ -590,6 +590,29 @@ export default function piQueueExtension(pi: ExtensionAPI) {
   const queue = new QueueManager()
 
   // ---------------------------------------------------------------------------
+  // Custom message renderer for queue messages in the message flow
+  // ---------------------------------------------------------------------------
+
+  pi.registerMessageRenderer("queue", (message, _theme, _context) => {
+    const content = message.content
+    if (!Array.isArray(content)) return { content }
+    const text = content.map((p) => (p.type === "text" ? p.text : "")).join("\n")
+    return { content: [{ type: "text", text }] }
+  })
+
+  // Helper: send queue output as a message in the flow (not a cramped widget)
+  const sendQueue = (lines: string[]): void => {
+    pi.sendMessage(
+      {
+        customType: "queue",
+        content: lines,
+        display: true,
+      },
+      { deliverAs: "steer" },
+    )
+  }
+
+  // ---------------------------------------------------------------------------
   // Command handler (subcommands parsed from args string)
   // ---------------------------------------------------------------------------
 
@@ -621,7 +644,7 @@ export default function piQueueExtension(pi: ExtensionAPI) {
           "",
           "Options for add: --priority N, --repo O/R, --model M, --mode fork|pr",
         ]
-        ctx.ui.setWidget("queue", lines)
+        sendQueue(lines)
         ctx.ui.notify("Queue manager loaded", "info")
         return
       }
@@ -659,7 +682,7 @@ export default function piQueueExtension(pi: ExtensionAPI) {
               lines.push(`${statusIcon} ${e.id.slice(0, 12)} | ${e.prompt.slice(0, 60).replace(/\n/g, " ")}${pausedTag}${sourceTag}${priorityTag}`)
             }
           }
-          ctx.ui.setWidget("queue", lines)
+          sendQueue(lines)
           break
         }
 
@@ -674,7 +697,7 @@ export default function piQueueExtension(pi: ExtensionAPI) {
             ctx.ui.notify(`Entry ${id} not found`, "error")
             return
           }
-          ctx.ui.setWidget("queue", JSON.stringify(entry, null, 2).split("\n"))
+          sendQueue(JSON.stringify(entry, null, 2).split("\n"))
           ctx.ui.notify(`Showing entry: ${id}`, "info")
           break
         }
@@ -807,7 +830,7 @@ export default function piQueueExtension(pi: ExtensionAPI) {
           lines.push("")
           lines.push(`Total: ${Object.values(byStatus).reduce((a, b) => a + b, 0)} entries`)
           if (pending > 0) lines.push(`(${pending} pending, ${running} running)`)
-          ctx.ui.setWidget("queue", lines)
+          sendQueue(lines)
           ctx.ui.notify("Stats updated", "info")
           break
         }
