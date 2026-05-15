@@ -430,10 +430,17 @@ export class QueueManager {
   /**
    * Called by the extension host to execute an entry.
    * Override this to provide actual task execution.
+   *
+   * @remarks The default implementation is a no-op (stderr only).
+   * The extension host should call `setExecuteFn()` to provide real
+   * task execution. The daemon does NOT auto-execute entries by default.
    */
   executeEntry(entry: QueueEntry): void {
-    // Default: mark as done (no real execution without a host)
-    console.log(`[pi-queue] executing task: ${entry.id} — ${entry.prompt.slice(0, 80)}`)
+    // Default: no-op — only logs to stderr so the daemon doesn't silently
+    // consume entries. Hosts must call setExecuteFn() to provide real execution.
+    console.error(
+      `[pi-queue] task ${entry.id} executed (no handler registered; use setExecuteFn())`
+    )
     entry.status = "done"
     this.storage.save(entry)
     this.events.emit({ event: "task_done", id: entry.id, status: "done" })
@@ -492,6 +499,8 @@ export default function piQueueExtension(pi: ExtensionAPI) {
           "  /queue resume <id>             — resume paused",
           "  /queue cancel <id>             — cancel task",
           "  /queue retry <id>              — retry failed",
+          "  /queue start                   — start daemon",
+          "  /queue stop                    — stop daemon",
           "  /queue stats                   — summary stats",
           "",
           "Options for add: --priority N, --repo O/R, --model M, --mode fork|pr",
@@ -641,6 +650,26 @@ export default function piQueueExtension(pi: ExtensionAPI) {
           break
         }
 
+        case "start": {
+          if (queue.isDaemonRunning()) {
+            ctx.ui.notify("Daemon already running", "info")
+          } else {
+            queue.startDaemon()
+            ctx.ui.notify("Daemon started", "success")
+          }
+          break
+        }
+
+        case "stop": {
+          if (!queue.isDaemonRunning()) {
+            ctx.ui.notify("Daemon not running", "info")
+          } else {
+            queue.stopDaemon()
+            ctx.ui.notify("Daemon stopped", "info")
+          }
+          break
+        }
+
         case "stats": {
           const { byStatus, bySource } = queue.stats()
           const lines: string[] = ["📊 Queue Stats", ""]
@@ -669,9 +698,11 @@ export default function piQueueExtension(pi: ExtensionAPI) {
     },
   })
 
-  // Daemon lifecycle
-  // QueueManager manages its own setInterval internally.
-  pi.on("session_start", () => queue.startDaemon())
+  // Daemon lifecycle — do NOT auto-start.
+  // The daemon starts only when explicitly invoked:
+  //   - by the `/queue start` command
+  //   - by another extension calling queue.startDaemon()
+  //   - after setExecuteFn() is registered with a real handler
   pi.on("session_shutdown", () => queue.stopDaemon())
 
   // Also expose queue manager for other extensions
