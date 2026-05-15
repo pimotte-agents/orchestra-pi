@@ -593,22 +593,28 @@ export default function piQueueExtension(pi: ExtensionAPI) {
   // Custom message renderer for queue messages in the message flow
   // ---------------------------------------------------------------------------
 
-  pi.registerMessageRenderer("queue", (message, _theme, _context) => {
-    const content = message.content
-    if (!Array.isArray(content)) return { content }
-    const text = content.map((p) => (p.type === "text" ? p.text : "")).join("\n")
-    return { content: [{ type: "text", text }] }
-  })
+  // No custom renderer — return undefined to use the default CustomMessageComponent
+  // rendering (which handles text content arrays properly and avoids the
+  // "child.render is not a function" crash when the renderer returns a plain object).
+  pi.registerMessageRenderer("queue", () => undefined)
 
   // Helper: send queue output as a message in the flow (not a cramped widget)
   const sendQueue = (lines: string[]): void => {
+    // Use deliverAs: "steer" for streaming, but only when actually streaming.
+    // When idle (not streaming), deliverAs: "steer" falls through to the
+    // else-branch in sendCustomMessage, which pushes the raw message into
+    // agent.state.messages. The content array then corrupts subsequent LLM
+    // calls because convertToLlm turns it into { role: "user", content: lines }
+    // where lines is a plain string array (no { type: "text" } wrappers).
+    //
+    // The fix: check isIdle and use the appropriate delivery mode.
     pi.sendMessage(
       {
         customType: "queue",
         content: lines,
         display: true,
       },
-      { deliverAs: "steer" },
+      pi.isIdle() ? {} : { deliverAs: "steer" },
     )
   }
 
@@ -620,7 +626,14 @@ export default function piQueueExtension(pi: ExtensionAPI) {
     description: "Queue management commands",
     handler: async (args: string, ctx) => {
       const trimmed = args.trim()
+      // No args at all: brief notification, do not hijack input
       if (!trimmed) {
+        ctx.ui.notify("Queue manager — use /queue help for usage", "info")
+        return
+      }
+
+      // /queue help: show usage instructions
+      if (trimmed === "help") {
         const { byStatus, bySource } = queue.stats()
         const total = Object.values(byStatus).reduce((a, b) => a + b, 0)
         const lines = [
@@ -631,21 +644,21 @@ export default function piQueueExtension(pi: ExtensionAPI) {
           `Sources: ${Object.entries(bySource).map(([k, v]) => `${k}:${v}`).join(", ")}`,
           "",
           "Usage:",
-          "  /queue list [status]           — list entries",
-          "  /queue show <id>               — show details",
-          "  /queue add <prompt> [options]   — add task",
-          "  /queue pause <id>              — pause task",
-          "  /queue resume <id>             — resume paused",
-          "  /queue cancel <id>             — cancel task",
-          "  /queue retry <id>              — retry failed",
-          "  /queue start                   — start daemon",
-          "  /queue stop                    — stop daemon",
-          "  /queue stats                   — summary stats",
+          "  /queue help                  — show this help",
+          "  /queue list [status]         — list entries",
+          "  /queue show <id>             — show details",
+          "  /queue add <prompt> [opts]   — add task",
+          "  /queue pause <id>            — pause task",
+          "  /queue resume <id>           — resume paused",
+          "  /queue cancel <id>           — cancel task",
+          "  /queue retry <id>            — retry failed",
+          "  /queue start                 — start daemon",
+          "  /queue stop                  — stop daemon",
+          "  /queue stats                 — summary stats",
           "",
           "Options for add: --priority N, --repo O/R, --model M, --mode fork|pr",
         ]
         sendQueue(lines)
-        ctx.ui.notify("Queue manager loaded", "info")
         return
       }
 
@@ -836,7 +849,7 @@ export default function piQueueExtension(pi: ExtensionAPI) {
         }
 
         default:
-          ctx.ui.notify(`Unknown queue subcommand: ${sub}\nUse /queue for usage`, "error")
+          ctx.ui.notify(`Unknown queue subcommand: ${sub}\nUse /queue help for usage`, "error")
       }
     },
   })
