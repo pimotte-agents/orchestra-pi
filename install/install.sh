@@ -4,7 +4,7 @@ set -euo pipefail
 # orchestra-pi install script
 # Copies extensions and creates state directories under ~/.agent/
 
-EXTENSIONS_DIR="${HOME}/.agent/extensions"
+EXTENSIONS_DIR="${HOME}/.pi/agent/extensions"
 STATE_DIRS=(
   "${HOME}/.agent/orchestra-queue"
   "${HOME}/.agent/orchestra-listeners"
